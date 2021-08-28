@@ -3,6 +3,7 @@
 
 from . import generators
 from . import py
+from . import dataset
 from .py.utils import default_unet_features
 
 
