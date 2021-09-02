@@ -83,7 +83,7 @@ parser.add_argument('--steps-per-epoch', type=int, default=4,
 parser.add_argument('--load-model', help='optional model file to initialize with')
 parser.add_argument('--initial-epoch', type=int, default=0,
                     help='initial epoch number (default: 0)')
-parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-4)')
 parser.add_argument('--cudnn-nondet', action='store_true',
                     help='disable cudnn determinism - might slow down training')
 
@@ -96,12 +96,12 @@ parser.add_argument('--int-steps', type=int, default=7,
                     help='number of integration steps (default: 7)')
 parser.add_argument('--int-downsize', type=int, default=2,
                     help='flow downsample factor for integration (default: 2)')
-parser.add_argument('--bidir', default = True,action='store_true', help='enable bidirectional cost function')
+parser.add_argument('--bidir', default = False,action='store_true', help='enable bidirectional cost function')
 
 # loss hyperparameters
 parser.add_argument('--image-loss', default='mse',
                     help='image reconstruction loss - can be mse or ncc (default: mse)')
-parser.add_argument('--lambda', type=float, dest='weight', default=0.01,
+parser.add_argument('--lambda', type=float, dest='weight', default=0.1,
                     help='weight of deformation loss (default: 0.01)')
 args = parser.parse_args()
 
@@ -219,10 +219,13 @@ for epoch in range(args.initial_epoch, args.epochs):
         model.save(os.path.join(model_dir, '%04d.pt' % epoch))
 
     epoch_loss = []
+    epoch_loss_val = []
     epoch_total_loss = []
+    epoch_total_loss_val = []
     epoch_step_time = []
     #train
     model.train()
+    epoch_start_time = time.time()
     for inputs,y_true in generator:
     #for step in range(args.steps_per_epoch):
         step_start_time = time.time()
@@ -265,12 +268,12 @@ for epoch in range(args.initial_epoch, args.epochs):
     fix = inputs[1][:, :, :, :, slice]
     moving = inputs[0][:, :, :, :, slice]
     wrap = y_pred[0][:, :, :, :, slice]
-    wrap2 = y_pred[1][:, :, :, :, slice]
+    #wrap2 = y_pred[1][:, :, :, :, slice]
     #field = y_pred[1][:, :, :, :, slice]
     writer.add_images('train/fix', fix, epoch, dataformats='NCHW')
     writer.add_images('train/move', moving, epoch, dataformats='NCHW')
     writer.add_images('train/wrap', wrap, epoch, dataformats='NCHW')
-    writer.add_images('train/wrap2',wrap2,epoch,dataformats='NCHW')
+    #writer.add_images('train/wrap2',wrap2,epoch,dataformats='NCHW')
     #writer.add_images('train/field', field, epoch, dataformats='NCHW')
 
     #eval
@@ -278,7 +281,6 @@ for epoch in range(args.initial_epoch, args.epochs):
     with torch.no_grad():
         
         #print(y_true.shape)
-        loss = 0
         for inputs,y_true in generator_val:
         #for step in range(args.steps_per_epoch):
             #inputs, y_true = next(generator_val)
@@ -290,23 +292,29 @@ for epoch in range(args.initial_epoch, args.epochs):
             y_true.append(0)
             # run inputs through the model to produce a warped image and flow field
             y_pred = model(*inputs,registration=True)
-            #loss = 0
+
+            loss = 0
+            loss_list = []
             for n, loss_function in enumerate(losses):
                 #print(len(y_true),len(y_pred),len(weights))
                 curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
+                loss_list.append(curr_loss.item())
                 loss += curr_loss
+
+        epoch_loss_val.append(loss_list)
+        epoch_total_loss_val.append(loss.item())
 
         slice = int(inshape[-1] / 2)
         fix = inputs[1][:, :, :, :, slice]
         moving = inputs[0][:, :, :, :, slice]
         wrap = y_pred[0][:, :, :, :, slice]
-        wrap2 = y_pred[1][:, :, :, :, slice] 
+        #wrap2 = y_pred[1][:, :, :, :, slice]
         #field = y_pred[1][:, :, :, :, slice]
 
     writer.add_images('val/fix',fix,epoch,dataformats='NCHW')
     writer.add_images('val/move',moving,epoch,dataformats='NCHW')
     writer.add_images('val/wrap',wrap,epoch,dataformats='NCHW')
-    writer.add_images('val/wrap2',wrap2,epoch,dataformats='NCHW')
+    #writer.add_images('val/wrap2',wrap2,epoch,dataformats='NCHW')
     #writer.add_images('val/field',field,epoch,dataformats='NCHW')
 
     defos = y_pred[1].to('cpu').permute(0,2,3,4,1).numpy()
@@ -327,8 +335,9 @@ for epoch in range(args.initial_epoch, args.epochs):
         plt.axis('off')
 
     writer.add_scalar('val/Jacobian_below_zero',np.mean(below_zero),epoch)
-    writer.add_figure('val/Jacobian',fig,epoch)
-
+    writer.add_figure('val_example/Jacobian',fig,epoch)
+    
+    epoch_time = time.time()- epoch_start_time
 
 
 
@@ -336,12 +345,15 @@ for epoch in range(args.initial_epoch, args.epochs):
 
     # print epoch info
     epoch_info = 'Epoch %d/%d' % (epoch + 1, args.epochs)
+    epoch_time_info = '%.4f sec/epoch' % epoch_time
     time_info = '%.4f sec/step' % np.mean(epoch_step_time)
     losses_info = ', '.join(['%.4e' % f for f in np.mean(epoch_loss, axis=0)])
     loss_info = 'loss: %.4e  (%s)' % (np.mean(epoch_total_loss), losses_info)
     loss_val = 'loss_val: %.4e ' % loss
-    print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
-    writer.add_scalars('Loss',{'train':np.mean(epoch_total_loss),'val':loss},epoch)
+    print(' - '.join((epoch_info, time_info,epoch_time_info, loss_info)), flush=True)
+    writer.add_scalars('total Loss',{'train':np.mean(epoch_total_loss),'val':loss},epoch)
+    writer.add_scalars('RMSE Loss',{'train':np.mean(epoch_loss,axis=0)[0],'val':np.mean(epoch_loss_val,axis=0)[0]})
+    writer.add_scalars('gradient of Defomation',{'train':np.mean(epoch_loss,axis=0)[-1],'val':np.mean(epoch_loss_val,axis=0)[-1]})
 
 # final model save
 model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))
