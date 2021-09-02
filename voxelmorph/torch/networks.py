@@ -7,6 +7,7 @@ from torch.distributions.normal import Normal
 from .. import default_unet_features
 from . import layers
 from .modelio import LoadableModel, store_config_args
+import neurite.tf.models
 
 
 class Unet(nn.Module):
@@ -162,7 +163,9 @@ class VxmDense(LoadableModel):
                  use_probs=False,
                  src_feats=1,
                  trg_feats=1,
-                 unet_half_res=False):
+                 unet_half_res=False,
+                 middle=False
+                 ):
         """ 
         Parameters:
             inshape: Input shape. e.g. (192, 192, 192)
@@ -224,7 +227,6 @@ class VxmDense(LoadableModel):
             self.resize = layers.ResizeTransform(int_downsize, ndims)
         else:
             self.resize = None
-
         # resize to full res
         if int_steps > 0 and int_downsize > 1:
             self.fullsize = layers.ResizeTransform(1 / int_downsize, ndims)
@@ -236,7 +238,10 @@ class VxmDense(LoadableModel):
 
         # configure optional integration layer for diffeomorphic warp
         down_shape = [int(dim / int_downsize) for dim in inshape]
-        self.integrate = layers.VecInt(down_shape, int_steps) if int_steps > 0 else None
+        #print(down_shape)
+        if middle:
+            assert self.bidir, 'you need bidir to activate middle registration'
+        self.integrate = layers.VecInt(down_shape, int_steps,middle = middle) if int_steps > 0 else None
 
         # configure transformer
         self.transformer = layers.SpatialTransformer(inshape)
